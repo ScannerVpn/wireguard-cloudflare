@@ -886,6 +886,14 @@ const S = {
   allScanResults: [], // for sub saving
 };
 
+// ─── ENDPOINT PRESETS (must be before init IIFE) ──────────────────────────────
+const PRESETS = [
+  {host:'162.159.192.1',port:2408},{host:'162.159.193.1',port:2408},
+  {host:'162.159.195.1',port:2408},{host:'188.114.96.1', port:2408},
+  {host:'162.159.192.1',port:443}, {host:'162.159.193.1',port:443},
+  {host:'162.159.192.1',port:8443},{host:'188.114.96.1', port:2096},
+];
+
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 (async () => {
   try {
@@ -1040,12 +1048,6 @@ async function applyLicense() {
 }
 
 // ─── ENDPOINT ─────────────────────────────────────────────────────────────────
-const PRESETS = [
-  {host:'162.159.192.1',port:2408},{host:'162.159.193.1',port:2408},
-  {host:'162.159.195.1',port:2408},{host:'188.114.96.1', port:2408},
-  {host:'162.159.192.1',port:443}, {host:'162.159.193.1',port:443},
-  {host:'162.159.192.1',port:8443},{host:'188.114.96.1', port:2096},
-];
 function buildEpGrid() {
   document.getElementById('epGrid').innerHTML = PRESETS.map(ep =>
     \`<button class="ep-btn" onclick="applyPresetEp('\${ep.host}:\${ep.port}')">
