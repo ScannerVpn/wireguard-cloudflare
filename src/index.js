@@ -8,19 +8,21 @@ const SERVER_PUBKEY = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=';
 const DEFAULT_EP   = '162.159.192.1:2408';
 
 const CF_RANGES = [
-  { id:'r1',  label:'x.162.159.192', base:'162.159.192' },
-  { id:'r2',  label:'x.162.159.193', base:'162.159.193' },
-  { id:'r3',  label:'x.162.159.195', base:'162.159.195' },
-  { id:'r4',  label:'x.162.159.197', base:'162.159.197' },
-  { id:'r5',  label:'x.188.114.96',  base:'188.114.96'  },
-  { id:'r6',  label:'x.188.114.97',  base:'188.114.97'  },
-  { id:'r7',  label:'x.188.114.98',  base:'188.114.98'  },
-  { id:'r8',  label:'x.188.114.99',  base:'188.114.99'  },
-  { id:'r9',  label:'x.104.16.0',    base:'104.16.0'    },
-  { id:'r10', label:'x.104.17.0',    base:'104.17.0'    },
-  { id:'r11', label:'x.104.18.0',    base:'104.18.0'    },
-  { id:'r12', label:'x.104.19.0',    base:'104.19.0'    },
-  { id:'r13', label:'x.162.159.204', base:'162.159.204' },
+  { id:'r1',  cidr:'173.245.48.0/20',  total:4094   },
+  { id:'r2',  cidr:'103.21.244.0/22',  total:1022   },
+  { id:'r3',  cidr:'103.22.200.0/22',  total:1022   },
+  { id:'r4',  cidr:'103.31.4.0/22',    total:1022   },
+  { id:'r5',  cidr:'141.101.64.0/18',  total:16382  },
+  { id:'r6',  cidr:'108.162.192.0/18', total:16382  },
+  { id:'r7',  cidr:'190.93.240.0/20',  total:4094   },
+  { id:'r8',  cidr:'188.114.96.0/20',  total:4094   },
+  { id:'r9',  cidr:'197.234.240.0/22', total:1022   },
+  { id:'r10', cidr:'198.41.128.0/17',  total:32766  },
+  { id:'r11', cidr:'162.158.0.0/15',   total:131070 },
+  { id:'r12', cidr:'104.16.0.0/13',    total:524286 },
+  { id:'r13', cidr:'104.24.0.0/14',    total:262142 },
+  { id:'r14', cidr:'172.64.0.0/13',    total:524286 },
+  { id:'r15', cidr:'131.0.72.0/22',    total:1022   },
 ];
 
 const CF_PORTS = [
@@ -697,27 +699,27 @@ input[type=range]{flex:1;accent-color:var(--accent);cursor:pointer}
     </div>
     <div class="card-body">
       <div class="scan-grid">
-        <!-- IP Ranges -->
-        <div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <span style="font-size:.8rem;color:var(--text2);font-weight:600">انتخاب رنج‌های آی‌پی کلادفلر:</span>
-            <div class="sel-btns">
-              <button class="btn btn-ghost btn-xs" onclick="selectAllRanges(true)">انتخاب همه</button>
-              <button class="btn btn-ghost btn-xs" onclick="selectAllRanges(false)">حذف همه</button>
-            </div>
-          </div>
-          <div class="check-list" id="rangeList"></div>
-        </div>
-        <!-- Ports -->
+        <!-- Ports — LEFT -->
         <div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <span style="font-size:.8rem;color:var(--text2);font-weight:600">انتخاب پورت‌ها:</span>
             <div class="sel-btns">
-              <button class="btn btn-ghost btn-xs" onclick="selectAllPorts(true)">انتخاب همه</button>
-              <button class="btn btn-ghost btn-xs" onclick="selectAllPorts(false)">حذف همه</button>
+              <button class="btn btn-ghost btn-xs" onclick="selectAllPorts(true)">همه</button>
+              <button class="btn btn-ghost btn-xs" onclick="selectAllPorts(false)">هیچ</button>
             </div>
           </div>
           <div class="check-list" id="portList"></div>
+        </div>
+        <!-- IP Ranges — RIGHT -->
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-size:.8rem;color:var(--text2);font-weight:600">انتخاب رنج‌های IP کلادفلر:</span>
+            <div class="sel-btns">
+              <button class="btn btn-ghost btn-xs" onclick="selectAllRanges(true)">همه</button>
+              <button class="btn btn-ghost btn-xs" onclick="selectAllRanges(false)">هیچ</button>
+            </div>
+          </div>
+          <div class="check-list" id="rangeList"></div>
         </div>
       </div>
 
@@ -1073,11 +1075,39 @@ function closeQR(e) {
 }
 
 // ─── SCANNER ──────────────────────────────────────────────────────────────────
+// ─── CIDR helpers ─────────────────────────────────────────────────────────────
+function ipToNum(ip) {
+  return ip.split('.').reduce((a, o) => ((a * 256) + parseInt(o, 10)), 0) >>> 0;
+}
+function numToIp(n) {
+  return [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255].join('.');
+}
+function randomIPsFromCIDR(cidr, count) {
+  const [base, prefStr] = cidr.split('/');
+  const prefix   = parseInt(prefStr, 10);
+  const hostBits = 32 - prefix;
+  const size     = Math.pow(2, hostBits) - 2; // exclude network+broadcast
+  const baseNum  = ipToNum(base);
+  const take     = Math.min(count, size);
+  const result   = new Set();
+  let tries = 0;
+  while (result.size < take && tries < take * 4) {
+    tries++;
+    const offset = Math.floor(Math.random() * size) + 1;
+    result.add(numToIp((baseNum + offset) >>> 0));
+  }
+  return [...result];
+}
+
+// ─── UI builders ──────────────────────────────────────────────────────────────
 function buildRangeList() {
   document.getElementById('rangeList').innerHTML = CF_RANGES.map(r => \`
     <label class="check-item \${state.selectedRanges.has(r.id) ? 'checked' : ''}" id="range_\${r.id}" onclick="toggleRange('\${r.id}')">
       <div class="check-mark"></div>
-      <div class="check-text">\${r.label}</div>
+      <div class="check-text">
+        <span style="direction:ltr;display:inline-block">\${r.cidr}</span>
+        <span class="check-sub" style="direction:ltr">\${r.total.toLocaleString()} IPs</span>
+      </div>
     </label>
   \`).join('');
 }
@@ -1088,7 +1118,7 @@ function buildPortList() {
       <div class="check-mark"></div>
       <div class="check-text">
         <span>\${p.label}</span>
-        <span class="check-sub" style="float:left;direction:ltr">\${p.port} \${p.udp ? '(UDP)' : '(TCP)'}</span>
+        <span class="check-sub" style="direction:ltr">\${p.port}\${p.udp?' ⚡UDP':' TCP'}</span>
       </div>
     </label>
   \`).join('');
@@ -1118,95 +1148,112 @@ function selectAllPorts(v) {
   });
 }
 
+// ─── Scanner ──────────────────────────────────────────────────────────────────
 async function startScan() {
   if (state.scanning) {
-    state.scanAbort?.abort();
     state.scanning = false;
-    document.getElementById('scanBtn').innerHTML = '🚀 شروع فرایند اسکن پیشرفته';
+    document.getElementById('scanBtn').textContent = '🚀 شروع فرایند اسکن پیشرفته';
     document.getElementById('scanSpin').classList.add('hidden');
     document.getElementById('scanProgressWrap').classList.add('hidden');
     return;
   }
 
-  const ranges     = CF_RANGES.filter(r => state.selectedRanges.has(r.id));
-  const ports      = CF_PORTS.filter(p => state.selectedPorts.has(p.port));
-  const ipsPerRange = parseInt(document.getElementById('ipCountSlider').value);
+  const ranges      = CF_RANGES.filter(r => state.selectedRanges.has(r.id));
+  const ports       = CF_PORTS.filter(p => state.selectedPorts.has(p.port));
+  const ipsPerRange = parseInt(document.getElementById('ipCountSlider').value, 10);
 
-  if (!ranges.length || !ports.length) return toast('رنج یا پورت انتخاب نشده', true);
+  if (!ranges.length) return toast('حداقل یک رنج IP انتخاب کنید', true);
+  if (!ports.length)  return toast('حداقل یک پورت انتخاب کنید', true);
 
-  // Generate random IPs
+  // Build task list: for each range generate random IPs, cross with selected ports
   const tasks = [];
   for (const range of ranges) {
-    const octets = new Set();
-    while (octets.size < ipsPerRange) octets.add(Math.floor(Math.random()*254)+1);
-    for (const oct of octets) {
-      const ip = range.base + '.' + oct;
-      for (const p of ports) tasks.push({ ip, port: p.port, udp: p.udp, label: p.label });
+    const ips = randomIPsFromCIDR(range.cidr, ipsPerRange);
+    for (const ip of ips) {
+      for (const p of ports) {
+        tasks.push({ ip, port: p.port, udp: p.udp });
+      }
     }
   }
 
-  state.scanning  = true;
-  state.scanAbort = new AbortController();
+  state.scanning    = true;
   state.scanResults = [];
 
-  document.getElementById('scanBtn').innerHTML = '⏹ توقف اسکن';
-  document.getElementById('scanSpin').classList.remove('hidden');
+  document.getElementById('scanBtn').innerHTML  = '<span id="scanSpin2" class="spin"></span> ⏹ توقف اسکن';
+  document.getElementById('scanSpin').classList.add('hidden');
   document.getElementById('scanProgressWrap').classList.remove('hidden');
   document.getElementById('scanProgressFill').style.width = '0%';
   document.getElementById('noResults').classList.add('hidden');
   document.getElementById('resultsTable').classList.remove('hidden');
   document.getElementById('resultsBody').innerHTML = '';
+  document.getElementById('scanStats').textContent = \`۰/\${tasks.length} — آماده‌سازی…\`;
 
   let done = 0;
-  const CONCURRENCY = 20;
+  const CONCURRENCY = 15;
   const queue = [...tasks];
 
-  async function runWorker() {
-    while (queue.length && !state.scanAbort.signal.aborted) {
+  async function worker() {
+    while (queue.length && state.scanning) {
       const task = queue.shift();
       if (!task) break;
-      const result = await testIP(task.ip, task.port, task.udp, state.scanAbort.signal);
-      state.scanResults.push(result);
+      const res = await probeIP(task.ip, task.port, task.udp);
+      state.scanResults.push(res);
       done++;
       const pct = Math.round(done / tasks.length * 100);
       document.getElementById('scanProgressFill').style.width = pct + '%';
-      document.getElementById('scanStats').textContent = \`\${done}/\${tasks.length} — یافت شده: \${state.scanResults.filter(r=>r.ok).length}\`;
-      if (result.ok || result.latency < 5000) addResultRow(result);
+      const found = state.scanResults.filter(r => r.ok).length;
+      document.getElementById('scanStats').textContent =
+        \`\${done}/\${tasks.length} اسکن شد — \${found} آی‌پی فعال یافت شد\`;
+      if (res.ok) addResultRow(res);
     }
   }
 
-  const workers = Array.from({ length: CONCURRENCY }, runWorker);
-  await Promise.all(workers);
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
   state.scanning = false;
-  document.getElementById('scanBtn').innerHTML = '🚀 شروع فرایند اسکن پیشرفته';
-  document.getElementById('scanSpin').classList.add('hidden');
+  document.getElementById('scanBtn').textContent = '🚀 شروع فرایند اسکن پیشرفته';
   document.getElementById('scanProgressWrap').classList.add('hidden');
-
+  if (!state.scanResults.some(r => r.ok)) {
+    document.getElementById('noResults').textContent = 'هیچ آی‌پی فعالی یافت نشد — پورت‌های HTTPS (443/8443/2096) را انتخاب کنید';
+    document.getElementById('noResults').classList.remove('hidden');
+  }
   sortResults();
-  toast('✅ اسکن تمام شد — ' + state.scanResults.filter(r=>r.ok).length + ' آی‌پی یافت شد');
+  toast('✅ اسکن پایان یافت — ' + state.scanResults.filter(r=>r.ok).length + ' آی‌پی فعال');
 }
 
-async function testIP(ip, port, isUDP, signal) {
-  if (isUDP) {
-    // UDP cannot be tested from browser; simulate with HTTPS on same IP
-    return await testHTTPS(ip, 443, signal).then(r => ({ ...r, port, udp: true, simulated: true }));
-  }
-  return testHTTPS(ip, port, signal);
-}
+// استفاده از img برای تست TCP (بهترین سازگاری با مرورگر، بدون مشکل CORS)
+function probeIP(ip, port, isUDP) {
+  // UDP ports cannot be tested from browser; use HTTPS:443 as latency proxy
+  const testPort  = isUDP ? 443 : port;
+  const useHttps  = [443, 8443, 2096].includes(testPort);
+  const proto     = useHttps ? 'https' : 'http';
 
-async function testHTTPS(ip, port, signal) {
-  const https  = [443, 8443, 2096].includes(port);
-  const proto  = https ? 'https' : 'http';
-  const url    = \`\${proto}://\${ip}:\${port}/cdn-cgi/trace\`;
-  const start  = performance.now();
-  try {
-    await fetch(url, { mode:'no-cors', cache:'no-store', signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]) });
-    return { ip, port, latency: Math.round(performance.now()-start), ok:true };
-  } catch(e) {
-    const lat = Math.round(performance.now()-start);
-    return { ip, port, latency: e.name==='AbortError' ? 9999 : lat, ok: lat < 3000 && e.name !== 'AbortError' };
-  }
+  return new Promise(resolve => {
+    const img   = new Image();
+    const start = performance.now();
+    let settled = false;
+
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      img.src = '';
+      const latency = Math.round(performance.now() - start);
+      resolve({ ip, port, latency: ok ? latency : (latency < 50 ? latency : 9999), ok });
+    };
+
+    const timer = setTimeout(() => done(false), 3000);
+
+    // onerror fires when connected (HTTP error / type-mismatch) OR network error
+    // We distinguish by timing: < 2800ms = likely connected
+    img.onload  = () => done(true);
+    img.onerror = () => {
+      const elapsed = performance.now() - start;
+      done(elapsed < 2800); // connected fast enough = IP is up
+    };
+
+    img.src = \`\${proto}://\${ip}:\${testPort}/cdn-cgi/trace?\${Math.random()}\`;
+  });
 }
 
 function addResultRow(r) {
@@ -1285,13 +1332,6 @@ function toggleDir() {
   document.getElementById('dirBtn').textContent = isRTL ? 'فارسی' : 'English';
 }
 
-if (!window.AbortSignal?.any) {
-  AbortSignal.any = (signals) => {
-    const ctrl = new AbortController();
-    signals.forEach(s => s.addEventListener('abort', () => ctrl.abort()));
-    return ctrl.signal;
-  };
-}
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" crossorigin="anonymous"></script>
 </body>
