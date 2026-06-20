@@ -92,6 +92,12 @@ function epParts(ep) {
   return i > 0 ? { host:ep.slice(0,i), port:parseInt(ep.slice(i+1))||2408 } : { host:ep, port:2408 };
 }
 
+// Ensure IPv6 always has /128 prefix (WARP API omits it sometimes)
+function fixIPv6(ipv6) {
+  if (!ipv6) return 'fd01:5ca1:ab1e::2/128';
+  return ipv6.includes('/') ? ipv6 : ipv6 + '/128';
+}
+
 // Decode base64 client_id → [b0, b1, b2] for reserved bytes
 function clientIdToBytes(clientId) {
   if (!clientId) return [0, 0, 0];
@@ -102,12 +108,12 @@ function clientIdToBytes(clientId) {
 }
 
 function buildWG(cfg, ep) {
-  const reserved = cfg.clientId ? `\n# WARP-Reserved = ${cfg.clientId}` : '';
+  const ipv6 = fixIPv6(cfg.ipv6);
   return `[Interface]
 PrivateKey = ${cfg.privateKey}
-Address = ${cfg.ipv4}/32, ${cfg.ipv6}
+Address = ${cfg.ipv4}/32, ${ipv6}
 DNS = 1.1.1.1, 1.0.0.1, 2606:4700:4700::1111
-MTU = 1280${reserved}
+MTU = 1280
 
 [Peer]
 PublicKey = ${cfg.serverPublicKey || SERVER_PUBKEY}
@@ -118,10 +124,11 @@ PersistentKeepalive = 25
 }
 
 function buildAmnezia(cfg, ep) {
+  const ipv6     = fixIPv6(cfg.ipv6);
   const reserved = cfg.clientId ? `\nReserved = ${cfg.clientId}` : '';
   return `[Interface]
 PrivateKey = ${cfg.privateKey}
-Address = ${cfg.ipv4}/32, ${cfg.ipv6}
+Address = ${cfg.ipv4}/32, ${ipv6}
 DNS = 1.1.1.1, 1.0.0.1
 MTU = 1280
 Jc = 120
@@ -144,10 +151,11 @@ PersistentKeepalive = 25
 
 function buildSingBox(cfg, ep) {
   const { host, port } = epParts(ep || cfg.endpoint || DEFAULT_EP);
+  const ipv6     = fixIPv6(cfg.ipv6);
   const reserved = clientIdToBytes(cfg.clientId);
   return JSON.stringify({
     outbounds: [{ type:'wireguard', tag:'WARP',
-      address:[`${cfg.ipv4}/32`, cfg.ipv6], private_key:cfg.privateKey,
+      address:[`${cfg.ipv4}/32`, ipv6], private_key:cfg.privateKey,
       peers:[{ server:host, server_port:port,
         public_key:cfg.serverPublicKey||SERVER_PUBKEY,
         allowed_ips:['0.0.0.0/0','::/0'], reserved }],
@@ -157,10 +165,10 @@ function buildSingBox(cfg, ep) {
 
 function buildURI(cfg, ep, name = 'WARP') {
   const { host, port } = epParts(ep || cfg.endpoint || DEFAULT_EP);
+  const ipv6 = fixIPv6(cfg.ipv6);
   const prv  = toB64URL(cfg.privateKey);
   const pub  = toB64URL(cfg.serverPublicKey || SERVER_PUBKEY);
-  const addr = encodeURIComponent(`${cfg.ipv4}/32,${cfg.ipv6}`);
-  // reserved is critical for WARP — v2rayNG/xray reads this
+  const addr = encodeURIComponent(`${cfg.ipv4}/32,${ipv6}`);
   const rsv  = cfg.clientId ? `&reserved=${encodeURIComponent(cfg.clientId)}` : '';
   return `wireguard://${prv}@${host}:${port}?publickey=${pub}&address=${addr}&dns=1.1.1.1&mtu=1280${rsv}#${encodeURIComponent(name)}`;
 }
@@ -334,9 +342,9 @@ export default {
           deviceId:res.id??'', deviceToken:res.token??'',
           privateKey, publicKey,
           serverPublicKey:peer.public_key??SERVER_PUBKEY,
-          clientId:cfg.client_id??'',   // reserved bytes for WireGuard handshake
+          clientId:cfg.client_id??'',
           ipv4:(addr.v4??'172.16.0.2').split('/')[0],
-          ipv6:addr.v6??'fd01:5ca1:ab1e::2/128',
+          ipv6: (() => { const v=addr.v6??'fd01:5ca1:ab1e::2/128'; return v.includes('/')?v:v+'/128'; })(),
           endpoint:peer.endpoint?.host??DEFAULT_EP,
           accountType:'Free', licenseKey:'',
           createdAt:Date.now(), updatedAt:Date.now(),
@@ -454,6 +462,34 @@ export default {
             await env.CONFIGS.put(`cleanips:${id}`, JSON.stringify(ips), { expirationTtl:86400*30 });
           }
           return ok({ success:true, count:ips.length });
+        }
+
+        // Refresh account from WARP API (fixes missing clientId for old accounts)
+        if (sub==='refresh' && m==='POST') {
+          const rec = await loadConfig(env, id);
+          if (!rec) return err('not found', 404);
+          if (!rec.deviceId || !rec.deviceToken) return err('اطلاعات دستگاه ندارد — اکانت جدید بسازید', 400);
+          const r = await fetch(`${WARP_API}/${WARP_VER}/reg/${rec.deviceId}`, {
+            headers: { 'Authorization':`Bearer ${rec.deviceToken}`, 'User-Agent':'okhttp/3.12.1' }
+          });
+          if (!r.ok) return err(`WARP API: ${r.status}`, 502);
+          const wd  = await r.json();
+          const res = wd.result ?? wd;
+          const cfg = res.config ?? {};
+          const peer= (cfg.peers??[])[0]??{};
+          const addr= cfg.interface?.addresses??{};
+          if (cfg.client_id) rec.clientId = cfg.client_id;
+          if (peer.public_key) rec.serverPublicKey = peer.public_key;
+          // Fix ipv6 prefix while we're at it
+          if (addr.v6) {
+            const v = addr.v6;
+            rec.ipv6 = v.includes('/') ? v : v + '/128';
+          } else if (rec.ipv6 && !rec.ipv6.includes('/')) {
+            rec.ipv6 = rec.ipv6 + '/128';
+          }
+          rec.updatedAt = Date.now();
+          await saveConfig(env, rec);
+          return ok({ success:true, clientId:rec.clientId||'', ipv6:rec.ipv6 });
         }
       }
 
@@ -852,17 +888,31 @@ const S = {
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 (async () => {
-  buildPortList();
-  buildRangeList();
-  buildEpGrid();
-  await loadConfigs();
-  if (S.configs.length > 0) await selectConfig(S.configs[0].id);
+  try {
+    buildPortList();
+    buildRangeList();
+    buildEpGrid();
+    await loadConfigs();
+    if (S.configs.length > 0) {
+      try { await selectConfig(S.configs[0].id); }
+      catch(e) { console.error('selectConfig failed:', e); }
+    }
+  } catch(e) {
+    console.error('Init failed:', e);
+    document.getElementById('accountList').innerHTML =
+      \`<div class="empty" style="color:var(--red)">❌ خطا در بارگذاری: \${e.message}<br><button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="location.reload()">🔄 رفرش</button></div>\`;
+  }
 })();
 
 // ─── ACCOUNTS ─────────────────────────────────────────────────────────────────
 async function loadConfigs() {
-  const data = await api('/api/configs');
-  S.configs = Array.isArray(data) ? data : [];
+  try {
+    const data = await api('/api/configs');
+    S.configs = Array.isArray(data) ? data : [];
+  } catch(e) {
+    console.error('loadConfigs error:', e.message);
+    S.configs = [];
+  }
   renderAccountList();
 }
 
@@ -878,11 +928,22 @@ function renderAccountList() {
       <div class="account-name">\${esc(c.name||'WARP Profile')}</div>
       <span class="badge \${bClass}">\${c.accountType||'Free'}</span>
       <div class="acct-actions" onclick="event.stopPropagation()">
+        <button class="btn btn-blue btn-xs"  onclick="refreshConfig('\${c.id}')" title="بروزرسانی از WARP">🔄</button>
         <button class="btn btn-ghost btn-xs" onclick="renameConfig('\${c.id}','\${esc(c.name||'')}')">✏️</button>
         <button class="btn btn-red btn-xs"   onclick="deleteConfig('\${c.id}')">🗑</button>
       </div>
     </div>\`;
   }).join('');
+}
+
+async function refreshConfig(id) {
+  toast('در حال بروزرسانی از WARP API…');
+  try {
+    const res = await api('/api/config/' + id + '/refresh', 'POST');
+    if (res.error) return toast('خطا: ' + res.error, true);
+    toast('✅ بروزرسانی شد — IPv6 و client_id اصلاح شدند');
+    if (S.current?.id === id) await selectConfig(id);
+  } catch(e) { toast('خطا: ' + e.message, true); }
 }
 
 async function generateAccount() {
@@ -1355,10 +1416,20 @@ function clearScanResults() {
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
 async function api(url, method='GET', body) {
-  const opts = { method, headers:{'Content-Type':'application/json'} };
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  const opts  = { method, headers:{'Content-Type':'application/json'}, signal:ctrl.signal };
   if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(url, opts);
-  return res.json();
+  try {
+    const res  = await fetch(url, opts);
+    clearTimeout(timer);
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('json')) throw new Error('پاسخ نامعتبر از سرور (status ' + res.status + ')');
+    return res.json();
+  } catch(e) {
+    clearTimeout(timer);
+    throw e;
+  }
 }
 function esc(s) { return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function toast(msg, isErr=false) {
