@@ -1,0 +1,13 @@
+name = "ez-40369f"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+account_id = "5f4f67ab4d35a6671b31bbadd44deb69"
+
+[[kv_namespaces]]
+binding = "CONFIGS"
+id = "a1a25fb461f3419b863ae60a871e1eef"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wireguard-configs"
+database_id = "32494ac3-4f7b-4d4c-9db7-c8dfd689cf45"
