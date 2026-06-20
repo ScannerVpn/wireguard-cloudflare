@@ -7,22 +7,23 @@ const WARP_VER      = 'v0a2158';
 const SERVER_PUBKEY = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=';
 const DEFAULT_EP    = '162.159.192.1:2408';
 
+// Only WARP-specific subnets — broader CDN ranges (104.x, 172.64.x) don't serve WARP UDP
 const CF_RANGES = [
-  { id:'r1',  cidr:'173.245.48.0/20',  total:4094   },
-  { id:'r2',  cidr:'103.21.244.0/22',  total:1022   },
-  { id:'r3',  cidr:'103.22.200.0/22',  total:1022   },
-  { id:'r4',  cidr:'103.31.4.0/22',    total:1022   },
-  { id:'r5',  cidr:'141.101.64.0/18',  total:16382  },
-  { id:'r6',  cidr:'108.162.192.0/18', total:16382  },
-  { id:'r7',  cidr:'190.93.240.0/20',  total:4094   },
-  { id:'r8',  cidr:'188.114.96.0/20',  total:4094   },
-  { id:'r9',  cidr:'197.234.240.0/22', total:1022   },
-  { id:'r10', cidr:'198.41.128.0/17',  total:32766  },
-  { id:'r11', cidr:'162.158.0.0/15',   total:131070 },
-  { id:'r12', cidr:'104.16.0.0/13',    total:524286 },
-  { id:'r13', cidr:'104.24.0.0/14',    total:262142 },
-  { id:'r14', cidr:'172.64.0.0/13',    total:524286 },
-  { id:'r15', cidr:'131.0.72.0/22',    total:1022   },
+  { id:'r1',  cidr:'162.159.192.0/24', total:254, warp:true  },
+  { id:'r2',  cidr:'162.159.193.0/24', total:254, warp:true  },
+  { id:'r3',  cidr:'162.159.195.0/24', total:254, warp:true  },
+  { id:'r4',  cidr:'162.159.197.0/24', total:254, warp:true  },
+  { id:'r5',  cidr:'162.159.204.0/24', total:254, warp:true  },
+  { id:'r6',  cidr:'188.114.96.0/24',  total:254, warp:true  },
+  { id:'r7',  cidr:'188.114.97.0/24',  total:254, warp:true  },
+  { id:'r8',  cidr:'188.114.98.0/24',  total:254, warp:true  },
+  { id:'r9',  cidr:'188.114.99.0/24',  total:254, warp:true  },
+  { id:'r10', cidr:'162.159.160.0/24', total:254, warp:true  },
+  { id:'r11', cidr:'172.64.0.0/24',    total:254, warp:false },
+  { id:'r12', cidr:'172.65.0.0/24',    total:254, warp:false },
+  { id:'r13', cidr:'104.16.0.0/24',    total:254, warp:false },
+  { id:'r14', cidr:'104.17.0.0/24',    total:254, warp:false },
+  { id:'r15', cidr:'104.18.0.0/24',    total:254, warp:false },
 ];
 
 const CF_PORTS = [
@@ -91,12 +92,22 @@ function epParts(ep) {
   return i > 0 ? { host:ep.slice(0,i), port:parseInt(ep.slice(i+1))||2408 } : { host:ep, port:2408 };
 }
 
+// Decode base64 client_id → [b0, b1, b2] for reserved bytes
+function clientIdToBytes(clientId) {
+  if (!clientId) return [0, 0, 0];
+  try {
+    const raw = atob(clientId);
+    return [raw.charCodeAt(0)||0, raw.charCodeAt(1)||0, raw.charCodeAt(2)||0];
+  } catch { return [0, 0, 0]; }
+}
+
 function buildWG(cfg, ep) {
+  const reserved = cfg.clientId ? `\n# WARP-Reserved = ${cfg.clientId}` : '';
   return `[Interface]
 PrivateKey = ${cfg.privateKey}
 Address = ${cfg.ipv4}/32, ${cfg.ipv6}
 DNS = 1.1.1.1, 1.0.0.1, 2606:4700:4700::1111
-MTU = 1280
+MTU = 1280${reserved}
 
 [Peer]
 PublicKey = ${cfg.serverPublicKey || SERVER_PUBKEY}
@@ -107,6 +118,7 @@ PersistentKeepalive = 25
 }
 
 function buildAmnezia(cfg, ep) {
+  const reserved = cfg.clientId ? `\nReserved = ${cfg.clientId}` : '';
   return `[Interface]
 PrivateKey = ${cfg.privateKey}
 Address = ${cfg.ipv4}/32, ${cfg.ipv6}
@@ -120,7 +132,7 @@ S2 = 0
 H1 = 1
 H2 = 2
 H3 = 3
-H4 = 4
+H4 = 4${reserved}
 
 [Peer]
 PublicKey = ${cfg.serverPublicKey || SERVER_PUBKEY}
@@ -132,12 +144,13 @@ PersistentKeepalive = 25
 
 function buildSingBox(cfg, ep) {
   const { host, port } = epParts(ep || cfg.endpoint || DEFAULT_EP);
+  const reserved = clientIdToBytes(cfg.clientId);
   return JSON.stringify({
     outbounds: [{ type:'wireguard', tag:'WARP',
       address:[`${cfg.ipv4}/32`, cfg.ipv6], private_key:cfg.privateKey,
       peers:[{ server:host, server_port:port,
         public_key:cfg.serverPublicKey||SERVER_PUBKEY,
-        allowed_ips:['0.0.0.0/0','::/0'], reserved:[0,0,0] }],
+        allowed_ips:['0.0.0.0/0','::/0'], reserved }],
       mtu:1280 }],
   }, null, 2);
 }
@@ -147,7 +160,9 @@ function buildURI(cfg, ep, name = 'WARP') {
   const prv  = toB64URL(cfg.privateKey);
   const pub  = toB64URL(cfg.serverPublicKey || SERVER_PUBKEY);
   const addr = encodeURIComponent(`${cfg.ipv4}/32,${cfg.ipv6}`);
-  return `wireguard://${prv}@${host}:${port}?publickey=${pub}&address=${addr}&dns=1.1.1.1&mtu=1280#${encodeURIComponent(name)}`;
+  // reserved is critical for WARP — v2rayNG/xray reads this
+  const rsv  = cfg.clientId ? `&reserved=${encodeURIComponent(cfg.clientId)}` : '';
+  return `wireguard://${prv}@${host}:${port}?publickey=${pub}&address=${addr}&dns=1.1.1.1&mtu=1280${rsv}#${encodeURIComponent(name)}`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -319,6 +334,7 @@ export default {
           deviceId:res.id??'', deviceToken:res.token??'',
           privateKey, publicKey,
           serverPublicKey:peer.public_key??SERVER_PUBKEY,
+          clientId:cfg.client_id??'',   // reserved bytes for WireGuard handshake
           ipv4:(addr.v4??'172.16.0.2').split('/')[0],
           ipv6:addr.v6??'fd01:5ca1:ab1e::2/128',
           endpoint:peer.endpoint?.host??DEFAULT_EP,
@@ -827,7 +843,7 @@ const S = {
   ep: '',
   dns: '1.1.1.1, 1.0.0.1, 2606:4700:4700::1111',
   mtu: 1280,
-  selectedRanges: new Set(CF_RANGES.map(r => r.id)),
+  selectedRanges: new Set(CF_RANGES.filter(r => r.warp).map(r => r.id)),
   selectedPorts:  new Set([443, 8443, 2096]),
   scanning: false,
   scanResults: [],   // all ok results
@@ -1148,7 +1164,9 @@ function buildRangeList() {
     \`<div class="check-item \${S.selectedRanges.has(r.id)?'checked':''}" id="range_\${r.id}" onclick="toggleRange('\${r.id}')">
       <div class="check-mark"></div>
       <div class="check-text">
-        <span style="direction:ltr;display:inline-block">\${r.cidr}</span>
+        <span style="direction:ltr;display:inline-block">\${r.cidr}
+          \${r.warp?'<span style="color:var(--accent);font-size:.65rem;margin-right:4px">WARP✓</span>':''}
+        </span>
         <span class="check-sub" style="direction:ltr">\${r.total.toLocaleString()} IPs</span>
       </div>
     </div>\`
